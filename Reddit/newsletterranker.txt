@@ -1,0 +1,402 @@
+// C: comments.
+// 0:CurrentTimeInMinutes
+// 1:PublishTimeInMinutes
+// 2:_Injected_News_32_HostQuality
+// 3:_Injected_NewsV2_32_SourceAuthority
+// 4:_Injected_News_15_WebSensorNewsAnswerFreshnessHeadlineAbsPosY
+// 5:_Injected_News_15_WebSensorNewsAnswerFreshnessHeadlineBlockHeight
+// 6:_Injected_News_15_WebSensorNewsAnswerFreshnessHeadlineBlockWidth
+// 7:_Injected_News_15_WebSensorNewsAnswerFreshnessAbsPosY
+// 8:_Injected_News_15_WebSensorNewsAnswerFreshnessBlockHeight
+// 9:_Injected_News_15_WebSensorNewsAnswerFreshnessBlockWidth
+// 10:_Injected_News_15_WebSensorNewsAnswerFreshnessHeadlineWholePageOptimalAnchorOrder
+// 11:_Injected_News_15_WebSensorNewsAnswerFreshnessHeadlineAnchorBlockMatchScore
+// 12:_Injected_News_15_WebSensorNewsAnswerFreshnessWholePageOptimalAnchorOrder
+// 13:_Injected_News_15_WebSensorNewsAnswerFreshnessAnchorBlockMatchScore
+// 14:_Injected_News_32_WebSensorNewsAnswerFreshnessHeadlineFeatureTimestampInMinute
+// 15:_Injected_News_32_WebSensorNewsAnswerFreshnessFeatureTimestampInMinute
+// 16:ANN_ClusterCount
+// 17:ANN_ClusterSpikingScore
+// 18:IsSentenceAspectModelTopic
+// 19:SBL_IsDSSMTopic_V2
+// 20:SBL_TopicLevelSourceAuthority_V2
+// 21:SBL_IsELSV3Topic
+// 22:_Injected_News_32_HostRank
+// 23:_DUPipeline_RT_DomainStaticRank
+// 24:_Injected_News_32_DomainDemotePromote_en-us
+// 25:QueryIsMedia
+// 26:SBL_NeighborAnnotationScore_V2
+// 27:SBL_NeighborAnnotationFromStart_V2
+// 28:SBL_NeighborAnnotationFromEnd_V2
+// 29:_Injected_NewsV2_32_NewsEventClusterDocumentCount
+// 30:_Injected_NewsV2_8_ICEPoorQuality
+// 31:SBL_IsNEMOTopic_V2
+// 32:SBL_NormalNEMOConfScore_V2
+// 33:TweetCountPercentile
+// 34:LatestTweetFeatureUpdateTime
+// 35:FirstDiscoveryTimeInTweet
+// 36:SBL_DocumentQualityAnnotation
+// 37:SBL_SpamNewsScore
+
+
+//Section 1: Freshness Layer Ranking Function
+function FreshnessLayerRanking(publishTimeInMinutes) {
+    var score = 0.0;
+    if (publishTimeInMinutes <= 1440) {
+        score = (1440 - publishTimeInMinutes) / 1440.0;
+    }
+
+    return score;
+}
+
+//Section 2: Worthiness Layer ranking Function
+function WebSensorHeadlineScore(headlinePosY, headlineBlockWidth, headlineBlockHeight) {
+    var pos = (headlinePosY + 1000.0) / 1000.0;
+    var block = (headlineBlockWidth * headlineBlockHeight + 5000.0) / (headlineBlockWidth * headlineBlockHeight);
+
+    return block * pos;
+}
+
+function WebSensorCategoryScore(categoryPosY, categoryBlockWidth, categoryBlockHeight) {
+    var pos = (categoryPosY + 1000.0) / 1000.0;
+    var block = (categoryBlockWidth * categoryBlockHeight + 5000.0) / (categoryBlockWidth * categoryBlockHeight);
+
+    return block * pos;
+}
+
+function SpikingInRelatedTopics(snippet) {
+    var spiking = 0.0;
+    LogDebug("snippet: " + snippet + "\r\n");
+    if (!snippet) {
+        return spiking;
+    }
+
+    var msFeature = JSON.parse(snippet);
+    if (!msFeature.RelatedTopicFeaturesDict) {
+        return spiking;
+    }
+
+    for (var relatedTopic in msFeature.RelatedTopicFeaturesDict) {
+        if (relatedTopic.startsWith("<") && relatedTopic.endsWith(">")) {
+            continue;
+        }
+
+        var relatedTopicSearchDict = msFeature.RelatedTopicFeaturesDict[relatedTopic];
+
+        var spikingInTopic = 0.0;
+        var topicSearch1Hour = relatedTopicSearchDict["QuerySearch1Hour"] == undefined ? 0 : relatedTopicSearchDict["QuerySearch1Hour"];
+        var topicSearch1Day = relatedTopicSearchDict["QuerySearch1Day"] == undefined ? 0 : relatedTopicSearchDict["QuerySearch1Day"];
+        var topicSearch1Week = relatedTopicSearchDict["QuerySearch1Week"] == undefined ? 0 : relatedTopicSearchDict["QuerySearch1Week"];
+
+        LogDebug("related topic search feature in hour/day/week: " + topicSearch1Hour + "," + topicSearch1Day + "," + topicSearch1Week + "\r\n");
+
+        if ((topicSearch1Day > 0) && (topicSearch1Hour / topicSearch1Day >= 0.3)) {
+            spikingInTopic = 1.0;
+        }
+
+        if ((topicSearch1Week > 0) && (topicSearch1Day / topicSearch1Week >= 0.3)) {
+            spikingInTopic = 1.0;
+        }
+
+        if ((topicSearch1Week > topicSearch1Day) && (topicSearch1Day <= 100)) {
+            spikingInTopic = 0.0;
+        }
+
+        if ((topicSearch1Week == topicSearch1Day) && (topicSearch1Day <= 50)) {
+            spikingInTopic = 0.0;
+        }
+
+        LogDebug("spiking in related topic score: " + spikingInTopic + "\r\n");
+
+        spiking = Math.max(spiking, spikingInTopic);
+    }
+
+    LogDebug("final spiking score: " + spiking + "\r\n");
+    return spiking;
+}
+
+function SpikingInTweet(tweetCountPercentile, tweetLastTime, tweetFirstTime) {
+    var spiking = 0.0;
+
+    if ((tweetLastTime - tweetFirstTime >= 60) && tweetCountPercentile >= 9930) {
+        spiking = 1.0;
+    }
+
+    if ((tweetLastTime - tweetFirstTime >= 60) && tweetCountPercentile >= 9985) {
+        spiking = 2.0;
+    }
+
+    return spiking;
+}
+
+function NewsWorthinessLayerRanking(hPosY, hBlockWidth, hBlockHeight, cPosY, cBlockWidth, cBlockHeight, hAnchorOrder, hMatchScore, cAnchorOrder, cMatchScore, annSize, annSpikingScore, siteCount, relatedTopicSpiking, socialSpiking) {
+    var hps = WebSensorHeadlineScore(hPosY, hBlockWidth, hBlockHeight);
+    var cps = WebSensorCategoryScore(cPosY, cBlockWidth, cBlockHeight);
+
+    var hScore = 0.0;
+    if ((hAnchorOrder > 0 && hAnchorOrder <= 12) || (hMatchScore >= 400)) {
+        if (hps >= 0.68) {
+            hScore = 3;
+        } else if (hps >= 0.6) {
+            hScore = 2;
+        } else {
+            hScore = 1;
+        }
+    }
+
+    var cScore = 0.0;
+    if ((cAnchorOrder > 0 && cAnchorOrder <= 12) || (cMatchScore >= 400)) {
+        if (cps >= 0.68) {
+            cScore = 3;
+        } else if (cps >= 0.6) {
+            cScore = 2;
+        } else {
+            cScore = 1;
+        }
+    }
+
+    var score = Math.max(hScore, cScore);
+
+    if (relatedTopicSpiking > 0) {
+        score = 4;
+    }
+
+    if (socialSpiking > 1) {
+        score = 5;
+    }
+
+    return score;
+}
+
+//Section 3: Authority Layer Ranking Function
+function SourceAuthorityLayerRanking(DLSourceAuthority, QLSourceAuthority, hostRank, staticRank, domainDP) {
+
+    if (DLSourceAuthority >= 80000 || QLSourceAuthority >= 100 || (domainDP & 255) == 7) {
+        return 2;
+    }
+
+    if (DLSourceAuthority >= 5000 || QLSourceAuthority > 0 || (domainDP & 255) == 6) {
+        return 1;
+    }
+
+    if (hostRank < 2000) {
+        return 0;
+    }
+
+    return 0;
+}
+
+// Section 4: Relevance Layer Ranking Function
+function RelevanceLayerRanking(rCDSSM, rELS, rTopicModel, isNemo, nemoConfScore) {
+
+    if (rTopicModel == 1 && (rCDSSM == 1 || rELS == 1 || (isNemo == 1 && nemoConfScore >= 1000))) {
+        return 2;
+    }
+
+    if (rCDSSM == 1 || rELS == 1 || (isNemo == 1 && nemoConfScore >= 1000)) {
+        return 1;
+    }
+
+    return 0;
+}
+
+// Reranking
+function MakeRankingObject(document, id) {
+    var rankingObject = new Object();
+    rankingObject.id = id;
+    rankingObject.score = document.score;
+
+    return rankingObject;
+}
+
+function RankingObjectComparison(ele1, ele2) {
+    return ele2.score - ele1.score;
+}
+
+// Deduping
+function CandidateToken(token) {
+    if (token.length == 0) {
+        return false;
+    }
+    return true;
+}
+
+function TokenizeTitle(title) {
+    var tokens = title.toLowerCase().split(/\s+/).filter(CandidateToken);
+    return tokens;
+}
+
+function LCS(tokens1, tokens2) {
+    length1 = tokens1.length;
+    length2 = tokens2.length;
+    var commonSequence = new Array(length1 + 1);
+    for (var i = 0; i < length1 + 1; i++) {
+        commonSequence[i] = new Array(length2 + 1);
+        for (var j = 0; j < length2 + 1; j++) {
+            commonSequence[i][j] = 0;
+        }
+    }
+    for (var i = 0; i < length1; i++) {
+        for (var j = 0; j < length2; j++) {
+            if (tokens1[i] == tokens2[j]) {
+                commonSequence[i + 1][j + 1] = commonSequence[i][j] + 1;
+            }
+            else {
+                commonSequence[i + 1][j + 1] = Math.max(commonSequence[i][j + 1], commonSequence[i + 1][j]);
+            }
+        }
+    }
+    return commonSequence[length1][length2];
+}
+
+function LCSSimilarity(tokens1, tokens2) {
+    length1 = tokens1.length;
+    length2 = tokens2.length;
+    return LCS(tokens1, tokens2) / Math.max(length1, length2);
+}
+
+// Demote Logic
+function MediaReportPatternV2(mediaReportScore, posFromStart, posFromEnd) {
+
+    if (mediaReportScore == 1 || mediaReportScore == 2) {
+        return true;
+    }
+
+    return false;
+}
+
+function ShortPattern(title) {
+    var tokens = title.trim().split(/\s+/);
+    if (tokens.length <= 3) {
+        return true;
+    }
+
+    return false;
+}
+
+// Maslow ranking function
+function MaslowRankingScore(rScore, aScore, wScore, fScore) {
+    var score = rScore * 100000 + aScore * 10000 + wScore * 1000 + fScore * 100;
+    return score;
+}
+
+function main() {
+    var rankingObjectList = new Array();
+
+    for (i = 0; i < documents.count; ++i) {
+        var currentTimeInMinutes = documents[i].rerankfeatures[0];
+        var publishTimeInMinutes = documents[i].rerankfeatures[1];
+        var hostQuality = documents[i].rerankfeatures[2];
+        var sourceAuthority = documents[i].rerankfeatures[3];
+        var hAbsPosY = documents[i].rerankfeatures[4];
+        var hBlockHeight = documents[i].rerankfeatures[5];
+        var hBlockWidth = documents[i].rerankfeatures[6];
+        var cAbsPosY = documents[i].rerankfeatures[7];
+        var cBlockHeight = documents[i].rerankfeatures[8];
+        var cBlockWidth = documents[i].rerankfeatures[9];
+        var hAnchorOrder = documents[i].rerankfeatures[10];
+        var hMatchScore = documents[i].rerankfeatures[11];
+        var cAnchorOrder = documents[i].rerankfeatures[12];
+        var cMatchScore = documents[i].rerankfeatures[13];
+        var annClusterCount = documents[i].rerankfeatures[16];
+        var annSpikingScore = documents[i].rerankfeatures[17];
+        var isTopicModel = documents[i].rerankfeatures[18];
+        var isDSSM = documents[i].rerankfeatures[19];
+        var isDSSMSource = documents[i].rerankfeatures[20];
+        var isELS = documents[i].rerankfeatures[21];
+        var hostRank = documents[i].rerankfeatures[22];
+        var staticRank = documents[i].rerankfeatures[23];
+        var domainDP = documents[i].rerankfeatures[24];
+        var mediaTag = documents[i].rerankfeatures[25];
+        var mediaReportScore = documents[i].rerankfeatures[26];
+        var posFromStart = documents[i].rerankfeatures[27];
+        var posFromEnd = documents[i].rerankfeatures[28];
+        var siteCount = documents[i].rerankfeatures[29];
+
+        // ice tag
+        var iceQuality = documents[i].rerankfeatures[30];
+
+        // nemo model
+        var isNemo = documents[i].rerankfeatures[31];
+        var nemoConfScore = documents[i].rerankfeatures[32];
+
+        // social features
+        var tweetCountPercentile = documents[i].rerankfeatures[33];
+        var tweetLastTime = documents[i].rerankfeatures[34];
+        var tweetFirstTime = documents[i].rerankfeatures[35];
+
+        // spam or ads features
+        var documentQuality = documents[i].rerankfeatures[36];
+        var spamScore = documents[i].rerankfeatures[37];
+
+        // logic starts
+        LogDebug("url: " + documents[i].url + "\r\n");
+
+        var ageInMinutes = currentTimeInMinutes - publishTimeInMinutes;
+        var snippet = documents[i].snippet;
+
+        var relatedTopicSpiking = SpikingInRelatedTopics(snippet);
+        var socialSpiking = SpikingInTweet(tweetCountPercentile, tweetLastTime, tweetFirstTime);
+
+        var rScore = RelevanceLayerRanking(isDSSM, isELS, isTopicModel, isNemo, nemoConfScore);
+        var aScore = SourceAuthorityLayerRanking(sourceAuthority, isDSSMSource, hostRank, staticRank, domainDP);
+        var wScore = NewsWorthinessLayerRanking(hAbsPosY, hBlockHeight, hBlockWidth, cAbsPosY, cBlockHeight, cBlockWidth, hAnchorOrder, hMatchScore, cAnchorOrder, cMatchScore, annClusterCount, annSpikingScore, siteCount, relatedTopicSpiking, socialSpiking);
+        var fScore = FreshnessLayerRanking(ageInMinutes);
+
+        documents[i].score = MaslowRankingScore(rScore, aScore, wScore, fScore);
+        LogDebug("ranking score: " + documents[i].score + "\r\n");
+
+        if (ageInMinutes > 1440) {
+            documents[i].score = -1000.1;
+        }
+
+        if (mediaTag == 1) {
+            if (MediaReportPatternV2(mediaReportScore, posFromStart, posFromEnd)) {
+                documents[i].score = -1000.2;
+            }
+        }
+
+        if (ShortPattern(documents[i].title)) {
+            documents[i].score = -1000.3;
+        }
+
+        if (hostQuality == 1) {
+            documents[i].score = -1000.4;
+        }
+
+        if (hostRank < 200 || (domainDP & 255) == 1) {
+            documents[i].score = -1000.5;
+        }
+
+        if (iceQuality == 1) {
+            documents[i].score = -1000.6;
+        }
+
+        if (documentQuality < 10) {
+            documents[i].score = -100;
+        }
+
+        if (spamScore > 5000) {
+            documents[i].score = -100.1;
+        }
+
+        rankingObjectList.push(MakeRankingObject(documents[i], i));
+    }
+
+    rankingObjectList.sort(RankingObjectComparison);
+
+    for (i = 0; i < rankingObjectList.length; ++i) {
+        for (j = 0; j < i; ++j) {
+            var id2 = rankingObjectList[i].id;
+            var id1 = rankingObjectList[j].id;
+            var tokens2 = TokenizeTitle(documents[id2].title);
+            var tokens1 = TokenizeTitle(documents[id1].title);
+            if (LCSSimilarity(tokens1, tokens2) >= 0.6) {
+                documents[id2].score = -10000;
+                break;
+            }
+        }
+    }
+}
+
+main();
